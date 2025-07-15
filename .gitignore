@@ -1,5 +1,6 @@
 # hrd_20250608/
-tests/
+# tests/
 hrd_20250608/grace_data/
 hrd_20250608/champ_data/
 hrd_20250608/swarm_data/
+*.xlsx

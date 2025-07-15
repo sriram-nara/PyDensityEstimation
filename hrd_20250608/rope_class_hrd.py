@@ -276,6 +276,7 @@ class rope_propagator:
 
         start_date = init_date
         end_date = datetime(year, 1, 1) + timedelta(days=day_of_year + forward_propagation - 1)
+    
 
         # Generate date series with sub_intervals-seconds resolution for n days
         self.date_series = pd.date_range(start=start_date, end = end_date, freq = str(self.sub_intervals) + 's')[:(-1)]
@@ -443,6 +444,197 @@ class rope_propagator:
         for k, z in enumerate(self.z_results_lst):
             self.z_dict[models[k]] = self.z_results_lst[k]
 
+
+    def propagate_models_mins(self, init_date, forward_propagation = 1):
+
+        init_date = pd.to_datetime(init_date)
+        year = init_date.year
+        day_of_year = init_date.day_of_year
+        hour0 = init_date.hour
+
+        start_date = init_date
+        print(start_date)
+        end_date = init_date + timedelta(minutes=forward_propagation)
+        print(end_date)
+
+        # Generate date series with sub_intervals-seconds resolution for n days
+        self.date_series = pd.date_range(start=start_date, end = end_date, freq = str(self.sub_intervals) + 's')[:(-1)]
+        self.hourly_date_series = pd.date_range(start=start_date, end = end_date, freq = 'H')[:(-1)]
+
+        n_components = self.n_components
+        normalization_method = 'std'
+        gamma = 1
+        delta_t = gamma*self.sub_intervals 
+        time_offset = self.delta_rho_ic
+        t0 = day_of_year * 24 - 24 + hour0 # 24 hours of day doy have not passed yet
+
+        n_mins_frcst = forward_propagation
+        forward_hours = n_mins_frcst / 60
+        n_days_frcst = n_mins_frcst / 1440 
+
+        # If less than 1 day, handle as special case
+        if forward_hours < 24:
+            # Use only the required number of minutes/hours for drivers
+            f10_idx = self.f10_idx
+            kp_idx = self.kp_idx
+            input_data_models = self.input_data_sindy['models_coefficients'][()]
+            B_nl_dmd_discrete = input_data_models['models_dict']['nl-dmd']['plain']['ridge_parameter_1.00']
+
+            IC_idx_at_start_of_year = np.where(self.drivers[0,:] == year)[0]
+            # tf must be int for indexing
+            tf = int(np.ceil(t0 + forward_hours + self.delta_rho_ic - hour0))
+            indices_with_time_offset = np.arange(np.min(IC_idx_at_start_of_year) - time_offset, np.min(IC_idx_at_start_of_year) + tf)
+            print(indices_with_time_offset)
+            print(self.drivers.shape, indices_with_time_offset.shape)
+            print(self.drivers[:, indices_with_time_offset])
+
+            drivers_at_toffset = np.copy(self.drivers[:, indices_with_time_offset]) 
+            self.drivers_IC = drivers_at_toffset        
+            drivers = np.copy(drivers_at_toffset[:, (t0):(tf)])
+
+            interpolated_drivers = self.interpolate_matrix_rows(drivers, self.sub_intervals)
+            self.interval_interpolated_drivers = interpolated_drivers[:, int(self.sub_intervals*self.delta_rho_ic):int(self.sub_intervals*drivers.shape[1])]
+            self.interval_hourly_drivers = drivers[:, int(time_offset):(drivers.shape[1])]
+        else:
+            # Fallback to normal propagate_models logic for >= 1 day
+            self.propagate_models(init_date, forward_propagation=int(np.ceil(forward_hours/24)))
+
+        if not hasattr(self, 'propagation_drivers'):
+            self.t0 = t0
+            self.tf = tf
+            self.propagation_drivers = interpolated_drivers
+
+        f10_value = np.copy(drivers_at_toffset[f10_idx, t0])
+        kp_value = np.copy(drivers_at_toffset[kp_idx, t0])
+        z_series = self.get_initial_z_from_drivers(self.initial_conditions, f10_value, kp_value)
+        z1_k = z_series.values.reshape((self.n_components, 1))
+        input_features = ['x_'+ str(k+1).zfill(2) for k in range(z1_k.shape[0])]
+        k = 0
+        t_span = (0, self.sub_intervals*(tuple(range(drivers.shape[1]))[-1] + 1) - 1) #Start and end times for ivp integration
+        t_interval = np.linspace(t_span[0], t_span[1], ((t_span[1] - t_span[0]) + 1)) #time points at which to evaluate the solution
+        self.t_interval = t_interval[self.sub_intervals*self.delta_rho_ic:]
+
+        # print(f'Maximum available time T = {(self.sub_intervals*(24*n_days_frcst - hour0)-1)*60}s')
+        self.z_results_lst = []
+
+        for chosen_basis_function in list(self.selected_bf_dict.keys()):
+            warnings.filterwarnings("ignore")
+            ridge_label = 'ridge_parameter_' + "{:.2f}".format(self.selected_bf_dict[chosen_basis_function])
+
+            self.B_sindy_joint_discrete = input_data_models['models_dict']['sindy'][chosen_basis_function][ridge_label]['joint']
+            self.B_sindy_f10_discrete = input_data_models['models_dict']['sindy'][chosen_basis_function][ridge_label]['sm_f10']
+            self.B_sindy_combined_discrete = input_data_models['models_dict']['sindy'][chosen_basis_function][ridge_label]['combined']
+            self.B_sindy_joint_low_d = input_data_models['models_dict']['sindy'][chosen_basis_function][ridge_label]['joint_low']
+            self.B_sindy_joint_mid_d = input_data_models['models_dict']['sindy'][chosen_basis_function][ridge_label]['joint_mid']
+            self.B_sindy_joint_high_d = input_data_models['models_dict']['sindy'][chosen_basis_function][ridge_label]['joint_high']
+
+
+            self.X_reg_norm_dict_sindy = input_data_models['bf_normalization_dict'][chosen_basis_function]['X_reg_norm_dict_sindy']
+            self.Y_reg_norm_dict_sindy = input_data_models['bf_normalization_dict'][chosen_basis_function]['Y_reg_norm_dict_sindy']
+            self.X_library_matrix_inputs_norm_dict = input_data_models['bf_normalization_dict'][chosen_basis_function]['X_library_matrix_inputs_norm_dict']
+            
+            self.model_params = {'normalization_method': 'std', 'functions': self.basis_functions_dict[chosen_basis_function]}
+            self.sindy_tgt_col = self.B_sindy_joint_discrete.shape[1] - n_components + self.pca_coupling
+            
+            ###########################################sindy###############################################
+            array_joint = self.move_column(np.copy(self.B_sindy_joint_discrete), 5, self.sindy_tgt_col)
+            A_sindy_joint = np.copy(array_joint[:, -n_components:])
+            B_sindy_joint = np.copy(array_joint[:, :(-n_components)])
+            A_sindy_joint_c, B_sindy_joint_c = self.discrete_to_continuous(A_sindy_joint, B_sindy_joint, delta_t)
+
+            array_combined = self.move_column(np.copy(self.B_sindy_combined_discrete), 5, self.sindy_tgt_col)
+            A_sindy_combined = np.copy(array_combined[:, -n_components:])
+            B_sindy_combined = np.copy(array_combined[:, :(-n_components)])
+            A_sindy_combined_c, B_sindy_combined_c = self.discrete_to_continuous(A_sindy_combined, B_sindy_combined, delta_t)
+
+            array_f10 = self.move_column(np.copy(self.B_sindy_f10_discrete), 5, self.sindy_tgt_col)
+            A_sindy_f10 = np.copy(array_f10[:, -n_components:])
+            B_sindy_f10 = np.copy(array_f10[:, :(-n_components)])
+            A_sindy_f10_c, B_sindy_f10_c = self.discrete_to_continuous(A_sindy_f10, B_sindy_f10, delta_t)   
+
+            array_joint_low = self.move_column(np.copy(self.B_sindy_joint_low_d), 5, self.sindy_tgt_col)
+            A_sindy_joint_low = np.copy(array_joint_low[:, -n_components:])
+            B_sindy_joint_low = np.copy(array_joint_low[:, :(-n_components)])
+            A_sindy_joint_low_c, B_sindy_joint_low_c = self.discrete_to_continuous(A_sindy_joint_low, B_sindy_joint_low, delta_t)
+
+            array_joint_mid = self.move_column(np.copy(self.B_sindy_joint_mid_d), 5, self.sindy_tgt_col)
+            A_sindy_joint_mid = np.copy(array_joint_mid[:, -n_components:])
+            B_sindy_joint_mid = np.copy(array_joint_mid[:, :(-n_components)])
+            A_sindy_joint_mid_c, B_sindy_joint_mid_c = self.discrete_to_continuous(A_sindy_joint_mid, B_sindy_joint_mid, delta_t)
+
+            array_joint_high = self.move_column(np.copy(self.B_sindy_joint_high_d), 5, self.sindy_tgt_col)
+            A_sindy_joint_high = np.copy(array_joint_high[:, -n_components:])
+            B_sindy_joint_high = np.copy(array_joint_high[:, :(-n_components)])
+            A_sindy_joint_high_c, B_sindy_joint_high_c = self.discrete_to_continuous(A_sindy_joint_high, B_sindy_joint_high, delta_t)
+            
+  
+            X_k_norm = self.build_sindy_dyn_frcst_inputs(z1_k, interpolated_drivers, \
+                self.X_library_matrix_inputs_norm_dict, self.X_reg_norm_dict_sindy, self.pca_coupling, \
+                    kp_idx, f10_idx, self.model_params, normalization_method, input_features, k = int(k))   
+            
+
+            
+            qF_norm = self.move_column(np.copy(X_k_norm).T, 5, self.sindy_tgt_col).T
+            q0_norm_sindy = np.copy(qF_norm[-n_components:])
+            solution_sindy = solve_ivp(
+                self.ode_func_sindy,
+                t_span,
+                q0_norm_sindy.flatten(),
+                args = (interpolated_drivers, A_sindy_joint_low_c, B_sindy_joint_low_c, A_sindy_joint_mid_c, \
+                    B_sindy_joint_mid_c, A_sindy_joint_high_c, B_sindy_joint_high_c, self.sindy_tgt_col, self.pca_coupling, \
+                        self.kp_th),
+                method = 'RK45',
+                t_eval = t_interval
+            )
+    
+            t = self.sub_intervals*solution_sindy.t
+
+            q_sol_sindy = np.full((len(q0_norm_sindy.flatten()), len(t_interval)), np.nan)
+            q_sol_sindy[:, :len(solution_sindy.t)] = solution_sindy.y
+            z_sindy = np.copy(q_sol_sindy * self.Y_reg_norm_dict_sindy['x_std'] + self.Y_reg_norm_dict_sindy['x_mean'])
+            z_sindy = z_sindy[:, int(self.sub_intervals*self.delta_rho_ic):]
+            self.z_results_lst.append(z_sindy)
+        
+        ###########################################dmd###############################################
+
+        A_dmd = np.copy(np.copy(B_nl_dmd_discrete[:, self.time_variables:(-4)]))
+        B_dmd = np.copy(np.concatenate([B_nl_dmd_discrete[:, :self.time_variables], B_nl_dmd_discrete[:, (-4):]], axis = 1))
+
+        A_dmd_c, B_dmd_c = self.discrete_to_continuous(A_dmd, B_dmd, delta_t)
+
+
+        X_k = np.concatenate([z1_k, interpolated_drivers[f10_idx:, k].reshape((-1, 1)), (interpolated_drivers[f10_idx, k] * interpolated_drivers[kp_idx, k]).reshape((-1, 1)), 
+            (interpolated_drivers[kp_idx, k] * interpolated_drivers[kp_idx, k]).reshape((-1, 1))])
+        X_k_norm = u.normalize_with_dict(X_k, self.X_reg_norm_dict_nl_dmd, normalization_method)   
+        X_k_norm = np.concatenate([interpolated_drivers[1:f10_idx, k].reshape((-1, 1)), X_k_norm])
+        q0_norm_dmd = np.copy(X_k_norm[self.time_variables:(-4), :])
+
+        solution_dmd = solve_ivp(
+            self.ode_func_dmd,
+            t_span,
+            q0_norm_dmd.flatten(),
+            args = (interpolated_drivers, A_dmd_c, B_dmd_c),
+            method = 'RK45',
+            t_eval = t_interval
+        )
+        
+        t = self.sub_intervals*solution_dmd.t
+
+
+        q_sol_dmd = np.full((len(q0_norm_dmd.flatten()), len(t_interval)), np.nan)
+        q_sol_dmd[:, :len(solution_dmd.t)] = solution_dmd .y
+        z_dmd = np.copy(q_sol_dmd * self.Y_reg_norm_dict_nl_dmd['x_std'] + self.Y_reg_norm_dict_nl_dmd['x_mean'])
+        z_dmd = z_dmd[:, self.sub_intervals*self.delta_rho_ic:]
+        self.z_results_lst.append(z_dmd)
+
+        if self.delta_rho_ic != 0:
+            self.t = t[:(-int(self.sub_intervals*self.delta_rho_ic))]
+        else:
+            self.t = t
+        self.z_dict = {}
+        models = list(self.selected_bf_dict.keys()) + ['dmd']
+        for k, z in enumerate(self.z_results_lst):
+            self.z_dict[models[k]] = self.z_results_lst[k]
 
 
     # def propagate_models(self, init_date, forward_propagation = 5):
