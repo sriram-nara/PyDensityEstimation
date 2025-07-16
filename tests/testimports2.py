@@ -17,6 +17,7 @@ from scipy.linalg import expm, logm
 from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 import hrd_20250608.rope_class_hrd as rope 
 
 
@@ -39,9 +40,10 @@ lla_array = np.vstack((latitude_values, local_time_values, altitude_values)).T.r
 # Prepare to store results
 all_dmd_outputs = []
 
-# Loop over 60 minutes, propagating 1 min at a time
+# Loop over 1 day (1440 minutes), propagating 1 min at a time
 current_date = init_date
-for i in range(1440):
+minutes_in_day = 24 * 60
+for i in range(minutes_in_day):
     sindy = rope.rope_propagator()
     sindy.propagate_models_mins(init_date=current_date, forward_propagation=forward_propagation_mins)
     all_dmd_outputs.append(sindy.z_dict['dmd'][:,-1][:, np.newaxis])
@@ -49,12 +51,43 @@ for i in range(1440):
 
 # Concatenate all outputs along the time axis 
 all_dmd_outputs = np.concatenate(all_dmd_outputs, axis=1)
-print(all_dmd_outputs.shape)
-df = pd.DataFrame(data=all_dmd_outputs)
-                  
-# Save the DataFrame to an Excel sheet
-excel_file_path = 'dmd_outputs.xlsx'
-df.to_excel(excel_file_path)
+print("Stepwise shape:", all_dmd_outputs.shape)
+df_stepwise = pd.DataFrame(data=all_dmd_outputs)
+
+# Now run the original implementation: propagate for one day in a single call
+sindy_full = rope.rope_propagator()
+sindy_full.propagate_models(init_date=init_date, forward_propagation=1)
+dmd_full = sindy_full.z_dict['dmd']
+print("Full shape:", dmd_full.shape)
+df_full = pd.DataFrame(data=dmd_full)
+
+# Align shapes for comparison (in case of off-by-one)
+min_cols = min(df_stepwise.shape[1], df_full.shape[1])
+df_stepwise = df_stepwise.iloc[:, :min_cols]
+df_full = df_full.iloc[:, :min_cols]
+
+# Calculate the difference between full and stepwise dataframes
+diff = df_full.values - df_stepwise.values
+
+# Compute the relative two-norm error for each column
+relative_two_norm_error = np.linalg.norm(diff, ord=2, axis=0) / np.linalg.norm(df_full.values, ord=2, axis=0)
+
+# Plot the relative two-norm error in log scale over the columns using a semilogy plot
+plt.figure(figsize=(10, 6))
+plt.semilogy(relative_two_norm_error, marker='o')
+plt.title('Relative Two-Norm Error Over Columns (Log Scale)')
+plt.xlabel('Column Index')
+plt.ylabel('Relative Two-Norm Error')
+plt.grid(True)
+plt.savefig('figs/relative_two_norm_error.png')
+plt.show()
+
+
+# Save the DataFrames to Excel
+excel_file_path = 'dmd_outputs_comparison.xlsx'
+with pd.ExcelWriter(excel_file_path) as writer:
+    df_stepwise.to_excel(writer, sheet_name='Stepwise')
+    df_full.to_excel(writer, sheet_name='Original')
 print(f'Data saved to {excel_file_path}')
 
 # rope_density = rope.rope_data_interpolator( data = sindy )

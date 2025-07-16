@@ -61,6 +61,7 @@ class rope_propagator:
         self.pca_coupling = 4
         self.n_components = 10
         self.sub_intervals = 60
+        self.sub_intervals_mins = 1
         self.kp_th = 0
         self.input_features = ['x_'+ str(k+1).zfill(2) for k in range(10)]
         poly1 = {'p1': lambda x: x}
@@ -453,9 +454,9 @@ class rope_propagator:
         hour0 = init_date.hour
 
         start_date = init_date
-        print(start_date)
+        # print(start_date)
         end_date = init_date + timedelta(minutes=forward_propagation)
-        print(end_date)
+        # print(end_date)
 
         # Generate date series with sub_intervals-seconds resolution for n days
         self.date_series = pd.date_range(start=start_date, end = end_date, freq = str(self.sub_intervals) + 's')[:(-1)]
@@ -466,11 +467,10 @@ class rope_propagator:
         gamma = 1
         delta_t = gamma*self.sub_intervals 
         time_offset = self.delta_rho_ic
-        t0 = day_of_year * 24 - 24 + hour0 # 24 hours of day doy have not passed yet
+        t0 = day_of_year * 24 - 24 + hour0 # 24 hours of day have not passed yet
 
         n_mins_frcst = forward_propagation
         forward_hours = n_mins_frcst / 60
-        n_days_frcst = n_mins_frcst / 1440 
 
         # If less than 1 day, handle as special case
         if forward_hours < 24:
@@ -482,15 +482,21 @@ class rope_propagator:
 
             IC_idx_at_start_of_year = np.where(self.drivers[0,:] == year)[0]
             # tf must be int for indexing
-            tf = int(np.ceil(t0 + forward_hours + self.delta_rho_ic - hour0))
+            # tf = int(np.ceil(t0 + forward_hours + self.delta_rho_ic - hour0))
+
+            
+            tf = int(np.ceil(t0 + forward_hours))
+
+            if tf == t0:
+                tf += 1  # Ensure at least one step for integration
+
             indices_with_time_offset = np.arange(np.min(IC_idx_at_start_of_year) - time_offset, np.min(IC_idx_at_start_of_year) + tf)
-            print(indices_with_time_offset)
-            print(self.drivers.shape, indices_with_time_offset.shape)
-            print(self.drivers[:, indices_with_time_offset])
 
             drivers_at_toffset = np.copy(self.drivers[:, indices_with_time_offset]) 
             self.drivers_IC = drivers_at_toffset        
             drivers = np.copy(drivers_at_toffset[:, (t0):(tf)])
+
+            # print(t0,tf)
 
             interpolated_drivers = self.interpolate_matrix_rows(drivers, self.sub_intervals)
             self.interval_interpolated_drivers = interpolated_drivers[:, int(self.sub_intervals*self.delta_rho_ic):int(self.sub_intervals*drivers.shape[1])]
@@ -503,6 +509,8 @@ class rope_propagator:
             self.t0 = t0
             self.tf = tf
             self.propagation_drivers = interpolated_drivers
+
+        # print(interpolated_drivers)
 
         f10_value = np.copy(drivers_at_toffset[f10_idx, t0])
         kp_value = np.copy(drivers_at_toffset[kp_idx, t0])
