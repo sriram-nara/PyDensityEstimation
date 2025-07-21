@@ -16,7 +16,11 @@ from scipy.linalg import expm, logm
 from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-import hrd_20250608.utilities_ds as u
+
+import sys
+sys.path.append(path.join('hrd_20250608'))
+
+import utilities_ds as u
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -227,6 +231,7 @@ class rope_propagator:
         n, m = matrix.shape
         interpolated_columns = m * sub_intervals 
         result = np.zeros((n, interpolated_columns))
+
         
         for i in range(n):
             x_original = np.arange(m)
@@ -485,7 +490,7 @@ class rope_propagator:
             # tf = int(np.ceil(t0 + forward_hours + self.delta_rho_ic - hour0))
 
             
-            tf = int(np.ceil(t0 + forward_hours))
+            tf = int(np.ceil(t0 + forward_hours + (self.delta_rho_ic / 60) - (hour0 / 60)))
 
             if tf == t0:
                 tf += 1  # Ensure at least one step for integration
@@ -588,11 +593,13 @@ class rope_propagator:
                 self.ode_func_sindy,
                 t_span,
                 q0_norm_sindy.flatten(),
-                args = (interpolated_drivers, A_sindy_joint_low_c, B_sindy_joint_low_c, A_sindy_joint_mid_c, \
-                    B_sindy_joint_mid_c, A_sindy_joint_high_c, B_sindy_joint_high_c, self.sindy_tgt_col, self.pca_coupling, \
+                args = (interpolated_drivers, A_sindy_joint_low_c, B_sindy_joint_low_c, A_sindy_joint_mid_c,
+                        B_sindy_joint_mid_c, A_sindy_joint_high_c, B_sindy_joint_high_c, self.sindy_tgt_col, self.pca_coupling,
                         self.kp_th),
-                method = 'RK45',
-                t_eval = t_interval
+                method = 'LSODA',
+                t_eval = t_interval,
+                atol = 1e-8,
+                rtol = 1e-7
             )
     
             t = self.sub_intervals*solution_sindy.t
@@ -622,8 +629,10 @@ class rope_propagator:
             t_span,
             q0_norm_dmd.flatten(),
             args = (interpolated_drivers, A_dmd_c, B_dmd_c),
-            method = 'RK45',
-            t_eval = t_interval
+            method = 'LSODA',
+            t_eval = t_interval,
+            atol = 1e-8,
+            rtol = 1e-7
         )
         
         t = self.sub_intervals*solution_dmd.t
@@ -953,14 +962,14 @@ class rope_data_interpolator( PythonAtmosphere ):
                 dates = pd.to_datetime(timestamps)
                 prop_date = self.data.date_series[0]
                 adjusted_forward_propagation = (dates.max() - prop_date).days + 1
-                print(f'System is propagating from {timestamps} for {adjusted_forward_propagation} days')   
+                # print(f'System is propagating from {timestamps} for {adjusted_forward_propagation} days')   
                 self.data.propagate_models(pd.to_datetime(prop_date), forward_propagation = adjusted_forward_propagation)
 
             else:
                 dates = pd.to_datetime(timestamps)
                 prop_date = self.data.date_series[0]
                 adjusted_forward_propagation = (dates.max() - prop_date).days + 1
-                print(f'System is propagating from {timestamps[0]} for {adjusted_forward_propagation} days')   
+                # print(f'System is propagating from {timestamps[0]} for {adjusted_forward_propagation} days')   
                 self.data.propagate_models(pd.to_datetime(prop_date), forward_propagation = adjusted_forward_propagation)
 
         t = self.data.t
@@ -1014,13 +1023,13 @@ class rope_data_interpolator( PythonAtmosphere ):
             if np.ndim(timestamps) == 0 or (hasattr(timestamps, 'shape') and timestamps.shape == ()):
                 dates = pd.to_datetime(timestamps)
                 adjusted_forward_propagation = (dates.max() - dates.min()).days + 1
-                print(f'System is propagating from {timestamps} for {adjusted_forward_propagation} days')   
+                # print(f'System is propagating from {timestamps} for {adjusted_forward_propagation} days')   
                 self.data.propagate_models(pd.to_datetime(timestamps), forward_propagation = adjusted_forward_propagation)
 
             else:
                 dates = pd.to_datetime(timestamps)
                 adjusted_forward_propagation = (dates.max() - dates.min()).days + 1
-                print(f'System is propagating from {timestamps[0]} for {adjusted_forward_propagation} days')   
+                # print(f'System is propagating from {timestamps[0]} for {adjusted_forward_propagation} days')   
                 self.data.propagate_models(pd.to_datetime(timestamps[0]), forward_propagation = adjusted_forward_propagation)
 
         t = self.data.t
