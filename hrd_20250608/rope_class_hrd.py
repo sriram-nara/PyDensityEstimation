@@ -303,7 +303,6 @@ class rope_propagator:
         self.drivers_IC = drivers_at_toffset        
         drivers = np.copy(drivers_at_toffset[:, (t0):(tf)])
         
-
         interpolated_drivers = self.interpolate_matrix_rows(drivers, self.sub_intervals)
         self.interval_interpolated_drivers = interpolated_drivers[:, int(self.sub_intervals*self.delta_rho_ic):int(self.sub_intervals*drivers.shape[1])]
         self.interval_hourly_drivers = drivers[:, int(time_offset):(drivers.shape[1])]
@@ -325,6 +324,9 @@ class rope_propagator:
 
         print(f'Maximum available time T = {(self.sub_intervals*(24*n_days_frcst - hour0)-1)*60}s')
         self.z_results_lst = []
+
+        import pdb
+        pdb.set_trace()
 
         for chosen_basis_function in list(self.selected_bf_dict.keys()):
             warnings.filterwarnings("ignore")
